@@ -6,6 +6,7 @@ from .models import (
     Answers,
     Responses
 )
+from .models import User
 
 
 class FormSerializer(serializers.ModelSerializer):
@@ -60,5 +61,45 @@ class ResponsesSerializer(serializers.ModelSerializer):
 
 
 
+
+
+class RegisterSerializer(serializers.Serializer):
+    username = serializers.CharField()
+    email = serializers.CharField()
+    password = serializers.CharField()
+
+    def validate(self, data):
+        if 'username' in data:
+            user = User.objects.filter(username = data['username'])
+            if user.exists():
+                raise serializers.ValidationError('username is already taken')
+        
+        if 'email' in data:
+            user = User.objects.filter(email = data['email'])
+            if user.exists():
+                raise serializers.ValidationError('email is already taken')
+
+        return data
+
+    def create(self , data):
+        password = data.pop('password')
+        user  = User.objects.create(**data)
+        user.set_password(password)
+        user.save()
+        return user
+
+
+class LoginSerializer(serializers.Serializer):
+    email = serializers.CharField()
+    password = serializers.CharField()
+
+    def validate(self, data):
+       
+        if 'email' in data:
+            user = User.objects.filter(email = data['email'])
+            if not user.exists():
+                raise serializers.ValidationError('account not found')
+
+        return data
 
 

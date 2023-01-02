@@ -6,7 +6,9 @@ from .utils.utility import generate_random_string
 # DRY => Do not repeat yourself
 
 class User(AbstractUser, models.Model):
+    USERNAME_FIELD = "email"
     email = models.EmailField(unique=True)
+    REQUIRED_FIELDS = []
 
 
 

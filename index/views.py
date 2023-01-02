@@ -1,12 +1,84 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from .models import Form , User , Questions , Choices , Responses , Answers
-from .serializers import FormSerializer , QuestionsSerializer , ChoicesSerializer ,ResponsesSerializer
+from .serializers import LoginSerializer,RegisterSerializer,FormSerializer , QuestionsSerializer , ChoicesSerializer ,ResponsesSerializer
 from rest_framework import viewsets
 from rest_framework.decorators import action
 from index.utils.utility import generate_random_string
+from django.contrib.auth import authenticate
+from rest_framework.authtoken.models import Token
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.authentication import TokenAuthentication
+from .permissions import IsFormOwner
 # GET , POST , PUT , PATCH , DELETE
+
 # 'responses' : [{'question' : 1 , 'answer' : 'Answer'} ,  {'question' : 2 , 'answer' : ['1' ,'2']}]
+
+
+class LoginView(APIView):
+    def post(self, request):
+        try:
+            data = request.data
+            serializer = LoginSerializer(data = data)
+            if serializer.is_valid():
+                email = serializer.data['email']
+                password = serializer.data['password']
+                user = authenticate(email = email , password=password)
+
+                if user:
+                    token , _ = Token.objects.get_or_create(user = user)
+                    return Response({
+                        'status' : True,
+                        'message' : 'login successfull',
+                        'data' : {'token' : str(token)}
+                    })
+                
+                return Response({
+                        'status' : False,
+                        'message' : 'invalid credentials',
+                        'data' : {}
+                    })
+
+
+
+            return Response(
+                        {
+                        'status' : False ,
+                        'message' : 'account not created',
+                        'data' : serializer.errors})
+
+        except Exception as e:
+            print(e)
+            return Response({'status' : False ,'message' : 'something went wrong' , 'data' : {}})
+
+
+
+
+class ResgisterView(APIView):
+    def post(self , request):
+        try:
+            data = request.data
+            serializer = RegisterSerializer(data = data)
+            if serializer.is_valid():
+                #data = serializer.data
+                serializer.save()
+
+
+                return Response(
+                        {
+                        'status' : True ,
+                        'message' : 'account created',
+                        'data' : {}})
+            return Response(
+                        {
+                        'status' : False ,
+                        'message' : 'account not created',
+                        'data' : serializer.errors})
+
+        except Exception as e:
+            print(e)
+            return Response({'status' : False ,'message' : 'something went wrong' , 'data' : {}})
+
 
 
 class ResponseViewSet(viewsets.ModelViewSet):
@@ -63,13 +135,12 @@ class ResponseViewSet(viewsets.ModelViewSet):
 
 
 class FormAPI(APIView):
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated , IsFormOwner]
 
     def get(self , request):
-        user = User.objects.get(email="admin@admin.com")
-        
+        user = request.user        
         forms = Form.objects.filter(creator = user)
-
-        print(forms)
 
         if request.GET.get('code'):
             forms = forms.filter(code = request.GET.get('code'))
@@ -83,7 +154,7 @@ class FormAPI(APIView):
     def post(self , request):
         try:
             data = request.data
-            user = User.objects.first()
+            user = request.user
             form = Form().create_blank_form(user)
             serializer = FormSerializer(form)
             return Response({
@@ -116,6 +187,8 @@ class FormAPI(APIView):
             form_obj = Form.objects.filter(code = data.get('form_id'))
 
             if form_obj.exists():
+                self.check_object_permissions(request , form_obj)
+
                 serializer = FormSerializer(form_obj[0] , data= data , partial = True)
                 if serializer.is_valid():
                     serializer.save()
@@ -163,11 +236,12 @@ class QuestionAPI(APIView):
         
             serializer = QuestionsSerializer(data= data)
             if serializer.is_valid():
+                form = Form.objects.get(id = data['form_id'])
+                
                 serializer.save()
                 choice = Choices.objects.create(choice = 'Option')
                 quesiton_obj = Questions.objects.get(id = serializer.data['id'])
                 quesiton_obj.choices.add(choice)
-                form = Form.objects.get(id = data['form_id'])
                 form.questions.add(quesiton_obj)
 
                 form_serializer = FormSerializer(form)
@@ -389,79 +463,81 @@ class ChoiceAPI(APIView):
 
 
 
-from django.db.models import Count
+
+
+
 
 class ResponsesAPI(APIView):
-    def get(self , request):
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated , IsFormOwner]
+    def get(self , request , pk):
         try:
-            formInfo = Form.objects.first()
-            responses = Responses.objects.filter(response_to = formInfo)
-        
-           
+            print(request.user)
+            formInfo = Form.objects.get(code = pk)
+            self.check_object_permissions(request , formInfo)
             responsesSummary = []
-            choiceAnswered = {}
+            choiceAnswered = { }
             non_choices_answer = {}
-
 
             for question in formInfo.questions.all():
                 answers = Answers.objects.filter(answer_to = question.id)
+
                 if question.question_type == "multiple choice" or question.question_type == "checkbox":
-                    choiceAnswered[question.question] = choiceAnswered.get(question.question, {})
+                    choiceAnswered[question.question] = choiceAnswered.get(question.question ,{})
+
 
                     for choice in question.choices.all():
-                        choiceAnswered[question.question][choice.choice] = 0
+                        choiceAnswered[question.question][choice.choice] = 0 
+
 
 
                     for answer in answers:
-                        print(answer)
                         choice = answer.answer_to.choices.get(choice = answer.answer).choice
-                        
-                        choiceAnswered[question.question][choice] = choiceAnswered.get(question.question, {}).get(choice, 0) + 1
-                
+                        choiceAnswered[question.question][choice] = choiceAnswered.get(question.question , {}).get(choice ,0) + 1
+
+
+
                 else:
                     for answer in answers:
                         if non_choices_answer.get(question.question):
                             non_choices_answer[question.question].append(answer.answer)
                         else:
-                            non_choices_answer[question.question] = [answer.answer]
+                            non_choices_answer[question.question] = [answer.answer] 
+    
+                responsesSummary.append({'question' :question , 'answer' : answer})
 
 
-
-
-                responsesSummary.append({"question": question, "answers":answers })
-
-
-          
+            
             final_list = []
-            for answr in choiceAnswered:
+
+            for answer in choiceAnswered:
                 final_dict = {}
-                final_dict['question']  = answr
-                final_dict['answer'] = choiceAnswered[answr]
+                final_dict['question'] = answer
+                final_dict['answer'] = choiceAnswered[answer]
 
                 final_dict['chartData'] = {
-                    'labels' : choiceAnswered[answr].keys(),
-                    'datasets' : [{'data' : choiceAnswered[answr].values()}]
+                    'labels' : choiceAnswered[answer].keys(),
+                    'datasets' : [
+                        {'data' : choiceAnswered[answer].values()}
+                    ]
                 }
 
-                final_dict['keys'] = choiceAnswered[answr].keys()
-                final_dict['values'] = choiceAnswered[answr].values()
+                final_dict['keys'] = choiceAnswered[answer].keys()
+                final_dict['values'] = choiceAnswered[answer].values()
 
                 final_list.append(final_dict)
-                
+
 
             return Response({
-                'message' : True,
-                'data' : final_list,
-                'non_choices_answer' : non_choices_answer
+                'status' : True,
+                'message' : 'success',
+                'data' : {'count' : Responses.objects.filter(response_to__code = pk).count(),'data' : final_list , 'non_choices_answer' : non_choices_answer}
             })
-        
-        except Exception as e:
-            import sys, os
-            print(e)
-            exc_type, exc_obj, exc_tb = sys.exc_info()
-            fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
-            print(exc_type, fname, exc_tb.tb_lineno)
 
+        except Exception as e:
+            print(e)
             return Response({
-                'message' : 'wrong'
+                'status': False,
+                'message' : 'something went wrong or you dont have permission to view this',
+                'data' : {}
             })
